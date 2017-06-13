@@ -30,7 +30,7 @@ flags.DEFINE_integer("LAMBDA", 10, "Gradient penalty lambda hyperparameter")
 flags.DEFINE_string("gpu", "1", "gpu id")
 flags.DEFINE_string("dataset_dir", "/media/huangrui/cacd/cacd_mtcnn128", "Path to dataset")
 flags.DEFINE_string("list_file", "/media/huangrui/cacd/cacd_mtcnn128_train.txt", "Path to list_file")
-flags.DEFINE_string("save_dir", "save/2017613_L1_D", "path to save checkpoints, samples and summary")
+flags.DEFINE_string("save_dir", "save/test", "path to save checkpoints, samples and summary")
 flags.DEFINE_string("mode", "train", "train or test")
 flags.DEFINE_boolean("flip", True, "flip the image horizontally")
 
