@@ -11,6 +11,7 @@ from scipy.io import savemat
 from scipy.misc import imread, imresize, imsave
 from ops import *
 import time
+import random
 
 class agGAN(object):
     """ The implementation of agGAN """
@@ -59,32 +60,50 @@ class agGAN(object):
         print('num of images', len(self.image_list))
         
         with tf.name_scope('load_images'):
-            path_queue = tf.train.string_input_producer(self.image_list, shuffle=self.mode == "train")
+            #data input flow at training
+            if self.mode == 'train':
+                path_queue = tf.train.string_input_producer(self.image_list, shuffle=self.mode == "train")
 
-            #number of threads to read image
-            num_preprocess_threads = 4
-            images_and_labels = []
-            
-            for _ in range(num_preprocess_threads):
-                row = path_queue.dequeue()
+                #number of threads to read image
+                num_preprocess_threads = 4
+                images_and_labels = []
                 
-                fname, label_id, label_age = tf.decode_csv(records=row, record_defaults=[["string"], [""], [""]], field_delim=" ")
-                label_id = tf.string_to_number(label_id, tf.int32)
-                label_age = tf.string_to_number(label_age, tf.int32)
+                for _ in range(num_preprocess_threads):
+                    row = path_queue.dequeue()
+                    
+                    fname, label_id, label_age = tf.decode_csv(records=row, record_defaults=[["string"], [""], [""]], field_delim=" ")
+                    label_id = tf.string_to_number(label_id, tf.int32)
+                    label_age = tf.string_to_number(label_age, tf.int32)
 
-                #read image
-                contents = tf.read_file(fname)
-                decode = tf.image.decode_jpeg
-                raw_input = decode(contents)
-                #scale to 0~1 flip resize to 256x256
-                raw_input = tf.image.convert_image_dtype(raw_input, dtype=tf.float32)
-                image = transform(raw_input, self.flip, self.image_size)
-                images_and_labels.append([image, label_id, label_age])
-            
-            self.input_batch, self.label_id_batch, self.label_age_batch = tf.train.batch_join(images_and_labels, batch_size=self.batch_size,
-                                                    shapes=[(self.image_size, self.image_size, self.num_input_channels), (), ()],
-                                                    capacity=4 * num_preprocess_threads * self.batch_size, allow_smaller_final_batch=True)
-        
+                    #read image
+                    contents = tf.read_file(fname)
+                    decode = tf.image.decode_jpeg
+                    raw_input = decode(contents)
+                    #scale to 0~1 flip resize to 256x256
+                    raw_input = tf.image.convert_image_dtype(raw_input, dtype=tf.float32)
+                    image = transform(raw_input, self.flip, self.image_size)
+                    images_and_labels.append([image, label_id, label_age])
+                
+                self.input_batch, self.label_id_batch, self.label_age_batch = tf.train.batch_join(images_and_labels, batch_size=self.batch_size,
+                                                        shapes=[(self.image_size, self.image_size, self.num_input_channels), (), ()],
+                                                        capacity=4 * num_preprocess_threads * self.batch_size, allow_smaller_final_batch=True)
+            #data placeholder at testing
+            else:
+                self.input_batch = tf.placeholder(
+                                        tf.float32, 
+                                        [None, self.image_size, self.image_size, self.num_input_channels],
+                                        name='input_batch')
+
+                self.label_id_batch = tf.placeholder(
+                                        tf.int32, 
+                                        [None],
+                                        name='label_id_batch')
+
+                self.label_age_batch = tf.placeholder(
+                                        tf.int32, 
+                                        [None],
+                                        name='label_age_batch')
+
         #*************************************build the graph************************************
         with tf.variable_scope('generator'):
             #encoder input image -> generated image, latent representation
@@ -284,7 +303,9 @@ class agGAN(object):
                 if should(summary_freq):
                     fetches['summary'] = self.summary
 
-                lambda_e = 0 if epoch < 5 else 0.0001
+                #lambda_e = 0 if epoch < 5 else 0.0001
+                #lambda_e = 0 if epoch < 3 else 1
+                lambda_e = 0.1
                 results = self.session.run(fetches, feed_dict={self.lambda_e: lambda_e})
 
                 if should(display_freq):
@@ -712,6 +733,55 @@ class agGAN(object):
             print(checkpoint)
             self.saver.restore(self.session, checkpoint)
 
+        num_test = 80
+        max_steps = int(num_test / 8) #10
+
+        input_batch = np.zeros((56, self.image_size, self.image_size, 3), dtype=np.float32)
+        label_id_batch = np.zeros((56,), dtype=np.int32)
+        label_age_batch = np.zeros((56,), dtype=np.int32)
+
+        seed = 10
+        random.seed(seed)
+        random.shuffle(self.image_list)
+        for i in range(max_steps):
+            images_path_labels = self.image_list[8*i:8*(i+1)]
+            n = 0
+            for image_label in images_path_labels:
+                image_path = image_label.split()[0]
+                id = int(image_label.split()[1])
+                age = int(image_label.split()[2])
+                #print(image_path, id, age)
+
+                img = imread(image_path)
+                img = imresize(img, [self.image_size, self.image_size], interp='nearest')
+                img = (img / 255.0) * 2 - 1
+                #print(img)
+                
+
+                input_batch[7*n:7*(n+1), :, :, :] = img 
+                label_id_batch[7*n:7*(n+1)] = id  
+                label_age_batch[7*n:7*(n+1)] = [k for k in range(7)]
+
+                n += 1
+
+            #print(input_batch[6,0,0,:])
+            #print(input_batch[7,0,0,:])
+            #exit(0)
+
+            G = self.session.run(
+                self.G, 
+                feed_dict={
+                    self.input_batch: input_batch,
+                    self.label_id_batch: label_id_batch,
+                    self.label_age_batch: label_age_batch
+                }
+            )
+            name = '{:06d}.png'.format(i)
+            self.save_test_image_pair(input_batch, G, name)
+            print("saving images:", name)
+
+
+        """
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(coord=coord)
 
@@ -729,6 +799,38 @@ class agGAN(object):
 
         coord.request_stop()
         coord.join(threads)
+        """    
+
+    def save_test_image_pair(self, image_src, image_gen, name):
+        sample_dir = os.path.join(self.save_dir, 'test_sample')
+        if not os.path.exists(sample_dir):
+            os.mkdir(sample_dir)
+
+        #transform the pixel value from -1~1 to 0~1
+        images_src = (image_src + 1) / 2.0
+        images_gen = (image_gen + 1) / 2.0
+
+        frame_size = 8
+        img_h = 128
+        img_w = 128
+        frame = np.zeros([img_h * frame_size, img_w * frame_size, 3])
+
+        for ind_row in range(8):
+            ind = ind_row * 7
+            img = images_src[ind]
+            img = imresize(img, [128, 128], interp='nearest')
+            frame[(img_h*ind_row):(img_h*ind_row+img_h), (img_w*0):(img_w*0+img_w), :] = img
+
+        for ind, image in enumerate(images_gen):
+            ind_row = (ind // 7)
+            ind_col = (ind % 7) + 1
+            image = imresize(image, [128, 128], interp='nearest')
+            frame[(img_h*ind_row):(img_h*ind_row+img_h), (img_w*ind_col):(img_w*ind_col+img_w), :] = image
+
+        imsave(os.path.join(sample_dir, name), frame)       
+
+
+        
 
 
 
