@@ -22,15 +22,15 @@ flags.DEFINE_integer("num_encoder_channels", 16, "number of channels in the firs
 flags.DEFINE_integer("num_f_channels", 320, "number of channels of feature representation")
 flags.DEFINE_integer("num_categories", 7, "number of num_categories(age groups) in the training set")
 flags.DEFINE_integer("num_gen_channels", 2048, "# number of channels of the first deconv layer of generator")
-flags.DEFINE_integer("display_freq", 5000, "display_freq")
+flags.DEFINE_integer("display_freq", 1000, "display_freq")
 flags.DEFINE_integer("summary_freq", 100, "summary_freq")
-flags.DEFINE_integer("save_freq", 10000, "save_freq")
+flags.DEFINE_integer("save_freq", 5000, "save_freq")
 flags.DEFINE_integer("gen_iters", 0, "gen_iters")
 flags.DEFINE_integer("LAMBDA", 10, "Gradient penalty lambda hyperparameter")
 flags.DEFINE_string("gpu", "1", "gpu id")
 flags.DEFINE_string("dataset_dir", "/media/huangrui/cacd/cacd_mtcnn128", "Path to dataset")
 flags.DEFINE_string("list_file", "/media/huangrui/cacd/cacd_mtcnn128_train.txt", "Path to list_file")
-flags.DEFINE_string("save_dir", "save/2017612_L1_skip_lr0.0002", "path to save checkpoints, samples and summary")
+flags.DEFINE_string("save_dir", "save/2017613_L1_D", "path to save checkpoints, samples and summary")
 flags.DEFINE_string("mode", "train", "train or test")
 flags.DEFINE_boolean("flip", True, "flip the image horizontally")
 
@@ -68,12 +68,17 @@ def main(_):
                 flip = a.flip
             )
 
-            model.train(num_epochs=a.epoch,
-                        learning_rate=0.0002,
-                        display_freq=a.display_freq,
-                        summary_freq=a.summary_freq,
-                        save_freq=a.save_freq
-            )
+            if a.mode == 'train':
+                print('\nTraining mode')
+                model.train(num_epochs=a.epoch,
+                            learning_rate=0.002,
+                            display_freq=a.display_freq,
+                            summary_freq=a.summary_freq,
+                            save_freq=a.save_freq
+                )
+            else:
+                print('\nTesting mode')
+                model.test()
 
 
 if __name__ == '__main__':

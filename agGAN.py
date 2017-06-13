@@ -53,13 +53,13 @@ class agGAN(object):
         self.flip = flip
 
         # *********************************input to graph****************************************
-        image_list = get_dataset(self.dataset_dir, self.list_file)
-        assert len(image_list) > 0, 'The dataset should not be empty'
-        self.data_size = len(image_list)
-        print('num of images', len(image_list))
+        self.image_list = get_dataset(self.dataset_dir, self.list_file)
+        assert len(self.image_list) > 0, 'The dataset should not be empty'
+        self.data_size = len(self.image_list)
+        print('num of images', len(self.image_list))
         
         with tf.name_scope('load_images'):
-            path_queue = tf.train.string_input_producer(image_list, shuffle=self.mode == "train")
+            path_queue = tf.train.string_input_producer(self.image_list, shuffle=self.mode == "train")
 
             #number of threads to read image
             num_preprocess_threads = 4
@@ -116,6 +116,7 @@ class agGAN(object):
             self.lambda_e = tf.placeholder(tf.float32, shape=[])
             print(self.lambda_e)
             self.loss_G = self.G_loss_L1 + self.lambda_e * self.G_loss_GAN
+            #self.loss_G = self.G_loss_L1
             
         with tf.name_scope('discriminator_loss'):
             #loss of discriminator
@@ -148,7 +149,7 @@ class agGAN(object):
         self.loss_G_summary = tf.summary.scalar('loss_G', self.loss_G)
 
         #for saving graph and variables
-        self.saver = tf.train.Saver(max_to_keep=0)
+        self.saver = tf.train.Saver(max_to_keep=1)
         
         """
         #************************************run time********************************************
@@ -266,8 +267,8 @@ class agGAN(object):
                 
                 #update generator and discriminator
                 fetches = {
-                    #'G_train': G_train,
-                    'D_train': D_train,
+                    'G_train': G_train,
+                    #'D_train': D_train,
                     'incr_global_step': incr_global_step,
                     'D_err': self.loss_D,
                     'G_err': self.loss_G,
@@ -283,7 +284,7 @@ class agGAN(object):
                 if should(summary_freq):
                     fetches['summary'] = self.summary
 
-                lambda_e = 0 if epoch < 25 else 0.0001
+                lambda_e = 0 if epoch < 5 else 0.0001
                 results = self.session.run(fetches, feed_dict={self.lambda_e: lambda_e})
 
                 if should(display_freq):
@@ -305,16 +306,17 @@ class agGAN(object):
                     print("saving model", checkpoint_dir)
                     self.saver.save(self.session, os.path.join(checkpoint_dir, 'model'), global_step=global_step.eval())
 
-                print('\nEpoch: [%d/%d] Batch: [%d/%d] iter: [%d] G_err=%.4f D_err=%.4f' %
-                    (epoch+1, num_epochs, batch_ind+1, num_batch_per_epoch, global_step.eval(), results['G_err'], results['D_err']))
-                print('\tG_L1_err=%.4f G_GAN_err=%.4f' %
-                    (results['G_L1_err'], results['G_GAN_err']))
-
                 #estimate left run time
                 elapse = time.time() - start_time
                 time_left = ((num_epochs - epoch - 1) * num_batch_per_epoch + (num_batch_per_epoch - batch_ind - 1)) * elapse
-                print("\t%.2fs/iter Time left: %02d:%02d:%02d lr:%f lambda:%f" %
-                      (elapse, int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60, global_learning_rate.eval(), lambda_e))
+                if should(100):
+                    print('\nEpoch: [%d/%d] Batch: [%d/%d] iter: [%d] G_err=%.4f D_err=%.4f' %
+                        (epoch+1, num_epochs, batch_ind+1, num_batch_per_epoch, global_step.eval(), results['G_err'], results['D_err']))
+                    print('\tG_L1_err=%.4f G_GAN_err=%.4f' %
+                        (results['G_L1_err'], results['G_GAN_err']))
+
+                    print("\t%.2fs/iter Time left: %02d:%02d:%02d lr:%f lambda:%f" %
+                          (elapse, int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60, global_learning_rate.eval(), lambda_e))
 
         coord.request_stop()
         coord.join(threads)
@@ -396,6 +398,7 @@ class agGAN(object):
             output = tf.tanh(output)
             layers.append(output)
             print(output)
+        #print('6', layers[6])
         return output, layers[6]
 
     def creat_discriminator(self, inputs, labels_age, reuse_variables=False):
@@ -405,8 +408,8 @@ class agGAN(object):
         layers = []
         labels_age_one_hot = tf.one_hot(labels_age, self.num_categories, on_value=1.0, off_value=0.0, dtype=tf.float32)
         input = concat_label(inputs, labels_age_one_hot, self.batch_size)
-        print(input)
-
+        print('1', input)
+        
         # layer_1: [batch, 2, 2, 512+7] => [batch, 1, 1, 512]
         with tf.variable_scope("layer_1"):
             convolved = conv(input, 512, stride=2)
@@ -699,7 +702,37 @@ class agGAN(object):
         imsave(os.path.join(sample_dir, name), frame)
 
     def test(self):
-        pass
+        num_images = self.data_size
+        print('num_images', self.data_size)
+
+        checkpoint_dir = os.path.join(self.save_dir, 'checkpoint')
+        if checkpoint_dir is not None:
+            print("loading model from checkpoint")
+            checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
+            print(checkpoint)
+            self.saver.restore(self.session, checkpoint)
+
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
+
+        max_steps = int(num_images / self.batch_size)
+        print('max_steps', max_steps)
+        for i in range(max_steps):
+            fetches = {
+                'input_batch': self.input_batch,
+                'G': self.G
+            }
+            results = self.session.run(fetches)
+            name = '{:06d}.png'.format(i)
+            self.save_image_pair(results['input_batch'], results['G'], name)
+            print("saving images:", name)
+
+        coord.request_stop()
+        coord.join(threads)
+
+
+
+
 
 
 
