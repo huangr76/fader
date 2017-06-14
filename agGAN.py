@@ -28,6 +28,7 @@ class agGAN(object):
                  save_dir = './save', # path to save checkpoints, samples and summary
                  dataset_dir = '', # path to dataset
                  list_file = '',
+                 list_file_test = '',
                  mode = 'train',
                  LAMBDA = 10,
                  wgan_gp = True,
@@ -46,6 +47,7 @@ class agGAN(object):
         self.save_dir = save_dir
         self.dataset_dir = dataset_dir
         self.list_file = list_file
+        self.list_file_test = list_file_test
         self.mode = mode
         self.num_person = 1876
         self.LAMBDA = LAMBDA
@@ -55,59 +57,61 @@ class agGAN(object):
 
         # *********************************input to graph****************************************
         self.image_list = get_dataset(self.dataset_dir, self.list_file)
+        self.image_list_test = get_dataset(self.dataset_dir, self.list_file_test)
         assert len(self.image_list) > 0, 'The dataset should not be empty'
         self.data_size = len(self.image_list)
         print('num of images', len(self.image_list))
         
         with tf.name_scope('load_images'):
             #data input flow at training
-            if self.mode == 'train':
-                path_queue = tf.train.string_input_producer(self.image_list, shuffle=self.mode == "train")
+            path_queue = tf.train.string_input_producer(self.image_list, shuffle=self.mode == "train")
 
-                #number of threads to read image
-                num_preprocess_threads = 4
-                images_and_labels = []
+            #number of threads to read image
+            num_preprocess_threads = 4
+            images_and_labels = []
+            
+            for _ in range(num_preprocess_threads):
+                row = path_queue.dequeue()
                 
-                for _ in range(num_preprocess_threads):
-                    row = path_queue.dequeue()
-                    
-                    fname, label_id, label_age = tf.decode_csv(records=row, record_defaults=[["string"], [""], [""]], field_delim=" ")
-                    label_id = tf.string_to_number(label_id, tf.int32)
-                    label_age = tf.string_to_number(label_age, tf.int32)
+                fname, label_id, label_age = tf.decode_csv(records=row, record_defaults=[["string"], [""], [""]], field_delim=" ")
+                label_id = tf.string_to_number(label_id, tf.int32)
+                label_age = tf.string_to_number(label_age, tf.int32)
 
-                    #read image
-                    contents = tf.read_file(fname)
-                    decode = tf.image.decode_jpeg
-                    raw_input = decode(contents)
-                    #scale to 0~1 flip resize to 256x256
-                    raw_input = tf.image.convert_image_dtype(raw_input, dtype=tf.float32)
-                    image = transform(raw_input, self.flip, self.image_size)
-                    images_and_labels.append([image, label_id, label_age])
-                
-                self.input_batch, self.label_id_batch, self.label_age_batch = tf.train.batch_join(images_and_labels, batch_size=self.batch_size,
-                                                        shapes=[(self.image_size, self.image_size, self.num_input_channels), (), ()],
-                                                        capacity=4 * num_preprocess_threads * self.batch_size, allow_smaller_final_batch=True)
+                #read image
+                contents = tf.read_file(fname)
+                decode = tf.image.decode_jpeg
+                raw_input = decode(contents)
+                #scale to 0~1 flip resize to 256x256
+                raw_input = tf.image.convert_image_dtype(raw_input, dtype=tf.float32)
+                image = transform(raw_input, self.flip, self.image_size)
+                images_and_labels.append([image, label_id, label_age])
+            
+            self.input_batch, self.label_id_batch, self.label_age_batch = tf.train.batch_join(images_and_labels, batch_size=self.batch_size,
+                                                    shapes=[(self.image_size, self.image_size, self.num_input_channels), (), ()],
+                                                    capacity=4 * num_preprocess_threads * self.batch_size, allow_smaller_final_batch=True)
             #data placeholder at testing
-            else:
-                self.input_batch = tf.placeholder(
-                                        tf.float32, 
-                                        [None, self.image_size, self.image_size, self.num_input_channels],
-                                        name='input_batch')
+            
+            self.input_batch_test = tf.placeholder(
+                                    tf.float32, 
+                                    [None, self.image_size, self.image_size, self.num_input_channels],
+                                    name='input_batch')
 
-                self.label_id_batch = tf.placeholder(
-                                        tf.int32, 
-                                        [None],
-                                        name='label_id_batch')
+            self.label_id_batch_test = tf.placeholder(
+                                    tf.int32, 
+                                    [None],
+                                    name='label_id_batch')
 
-                self.label_age_batch = tf.placeholder(
-                                        tf.int32, 
-                                        [None],
-                                        name='label_age_batch')
+            self.label_age_batch_test = tf.placeholder(
+                                    tf.int32, 
+                                    [None],
+                                    name='label_age_batch')
 
         #*************************************build the graph************************************
         with tf.variable_scope('generator'):
             #encoder input image -> generated image, latent representation
             self.G, self.latent = self.creat_generator(self.input_batch, self.label_age_batch)
+
+            self.G_test, _ = self.creat_generator(self.input_batch_test, self.label_age_batch_test, reuse_variables=True)
             
         with tf.variable_scope('discriminator'):
             # discriminator on input image
@@ -305,7 +309,7 @@ class agGAN(object):
 
                 #lambda_e = 0 if epoch < 5 else 0.0001
                 #lambda_e = 0 if epoch < 3 else 1
-                lambda_e = 0.1
+                lambda_e = 0
                 results = self.session.run(fetches, feed_dict={self.lambda_e: lambda_e})
 
                 if should(display_freq):
@@ -338,6 +342,9 @@ class agGAN(object):
 
                     print("\t%.2fs/iter Time left: %02d:%02d:%02d lr:%f lambda:%f" %
                           (elapse, int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60, global_learning_rate.eval(), lambda_e))
+
+            #evaluate  
+            self.evaluate(epoch+1)
 
         coord.request_stop()
         coord.join(threads)
@@ -461,7 +468,6 @@ class agGAN(object):
         for l in layers:
             print(l)    
         return layers[-1]
-
 
     def encoder(self, image, reuse_variables=False, enable_bn=True, is_training=True):
         if reuse_variables:
@@ -678,8 +684,6 @@ class agGAN(object):
         
         return logits_id, logits_age, logits_d
 
-    
-    
     def save_image_batch(self, image_batch, name):
         sample_dir = os.path.join(self.save_dir, 'sample')
         if not os.path.exists(sample_dir):
@@ -722,6 +726,57 @@ class agGAN(object):
 
         imsave(os.path.join(sample_dir, name), frame)
 
+    def evaluate(self, epoch):
+        num_images = len(self.image_list_test)
+        print('num_images', num_images)
+
+        num_test = 80
+        max_steps = int(num_test / 8) #10
+
+        input_batch = np.zeros((64, self.image_size, self.image_size, 3), dtype=np.float32)
+        label_id_batch = np.zeros((64,), dtype=np.int32)
+        label_age_batch = np.zeros((64,), dtype=np.int32)
+
+        seed = 10
+        random.seed(seed)
+        random.shuffle(self.image_list_test)
+        for i in range(max_steps):
+            images_path_labels = self.image_list_test[8*i:8*(i+1)]
+            n = 0
+            for image_label in images_path_labels:
+                image_path = image_label.split()[0]
+                id = int(image_label.split()[1])
+                age = int(image_label.split()[2])
+                #print(image_path, id, age)
+
+                img = imread(image_path)
+                img = imresize(img, [self.image_size, self.image_size], interp='nearest')
+                img = (img / 255.0) * 2 - 1
+                #print(img)
+                
+
+                input_batch[7*n:7*(n+1), :, :, :] = img 
+                label_id_batch[7*n:7*(n+1)] = id  
+                label_age_batch[7*n:7*(n+1)] = [k for k in range(7)]
+
+                n += 1
+
+            #print(input_batch[6,0,0,:])
+            #print(input_batch[7,0,0,:])
+            #exit(0)
+
+            G = self.session.run(
+                self.G_test, 
+                feed_dict={
+                    self.input_batch_test: input_batch,
+                    self.label_id_batch_test: label_id_batch,
+                    self.label_age_batch_test: label_age_batch
+                }
+            )
+            name = 'epoch{:02d}_{:06d}.png'.format(epoch, i)
+            self.save_test_image_pair(input_batch[0:56], G[0:56], name)
+            print("saving images:", name)
+
     def test(self):
         num_images = self.data_size
         print('num_images', self.data_size)
@@ -742,7 +797,7 @@ class agGAN(object):
 
         seed = 10
         random.seed(seed)
-        random.shuffle(self.image_list)
+        random.shuffle(self.image_list_test)
         for i in range(max_steps):
             images_path_labels = self.image_list[8*i:8*(i+1)]
             n = 0
@@ -769,11 +824,11 @@ class agGAN(object):
             #exit(0)
 
             G = self.session.run(
-                self.G, 
+                self.G_test, 
                 feed_dict={
-                    self.input_batch: input_batch,
-                    self.label_id_batch: label_id_batch,
-                    self.label_age_batch: label_age_batch
+                    self.input_batch_test: input_batch,
+                    self.label_id_batch_test: label_id_batch,
+                    self.label_age_batch_test: label_age_batch
                 }
             )
             name = '{:06d}.png'.format(i)
