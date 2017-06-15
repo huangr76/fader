@@ -111,11 +111,19 @@ class agGAN(object):
             #encoder input image -> generated image, latent representation
             self.G, self.latent, self.logits_id_classify = self.creat_generator(self.input_batch, self.label_age_batch)
 
-            self.G_test, _, _ = self.creat_generator(self.input_batch_test, self.label_age_batch_test, reuse_variables=True)
+            self.G_test, _, _ = self.creat_generator(self.input_batch_test, self.label_age_batch_test, reuse_variables=True, is_training=False)
             
         with tf.variable_scope('discriminator'):
             # discriminator on input image
             self.predict = self.creat_discriminator(self.latent, self.label_age_batch)
+
+        with tf.variable_scope('discriminator_img'):
+            # discriminator on input image
+            self.predict_real = self.discriminator_img(self.input_batch)
+
+            # discriminator on G
+            self.predict_fake = self.discriminator_img(self.G, reuse_variables=True)
+        
             
         #*************************************loss function**************************************
         with tf.name_scope('total_variation_loss'):
@@ -141,16 +149,29 @@ class agGAN(object):
             #GAN loss
             EPS = 1e-12
             self.G_loss_GAN = tf.reduce_mean(-tf.log(1 - self.predict + EPS)) 
-
             self.lambda_e = tf.placeholder(tf.float32, shape=[])
             print(self.lambda_e)
+
+            self.G_fake_loss_d = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=self.predict, labels=tf.ones_like(self.predict_fake)))
             
             #self.loss_G = self.G_loss_L1 + self.lambda_e * self.G_loss_GAN
-            self.loss_G = self.G_loss_L1
+            self.loss_G = self.G_loss_L1 + self.G_fake_loss_d
             
         with tf.name_scope('discriminator_loss'):
             #loss of discriminator
             self.loss_D = tf.reduce_mean(-tf.log(self.predict + EPS))
+
+        with tf.name_scope('discriminator_img_loss'):
+            self.D_real_loss_d = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=self.predict_real, labels=tf.ones_like(self.predict_real)))
+
+            #fake image
+            self.D_fake_loss_d = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=self.predict_fake, labels=tf.zeros_like(self.predict_fake)))
+
+            #loss of discriminator
+            self.loss_D = self.D_real_loss_d + self.D_fake_loss_d
         
         #*************************************trainable variables****************************************
         trainable_variables = tf.trainable_variables()
@@ -164,7 +185,8 @@ class agGAN(object):
         
         #variables of discriminator
         self.D_variables = [var for var in trainable_variables if 'layer_' in var.name]
-        print(len(self.E_variables), len(self.G_variables), len(self.D_variables))
+        self.Dimg_variables = [var for var in trainable_variables if 'disc_img_' in var.name]
+        print(len(self.E_variables), len(self.G_variables), len(self.D_variables), len(self.Dimg_variables))
         
         
         #*************************************collect the summary**************************************
@@ -172,10 +194,17 @@ class agGAN(object):
         self.latent_summary = tf.summary.histogram('latent', self.latent)
         self.predict_summary = tf.summary.histogram('predict', self.predict)
         self.logits_id_classify_summary = tf.summary.histogram('logits_id_classify', self.logits_id_classify)
+        self.predict_real_summary = tf.summary.histogram('predict_real', self.predict_real)
+        self.predict_fake_summary = tf.summary.histogram('predict_fake', self.predict_fake)
         
         self.E_loss_id_summary = tf.summary.scalar('E_loss_id', self.E_loss_id)
+
         self.G_loss_L1_summary = tf.summary.scalar('G_loss_L1', self.G_loss_L1)
         self.G_loss_GAN_summary = tf.summary.scalar('G_loss_GAN', self.G_loss_GAN)
+        self.G_fake_loss_d_summary = tf.summary.scalar('G_fake_loss_d', self.G_fake_loss_d)
+
+        self.D_real_loss_d_summary = tf.summary.scalar('D_real_loss_d', self.D_real_loss_d)
+        self.D_fake_loss_d_summary = tf.summary.scalar('D_fake_loss_d', self.D_fake_loss_d)
         
         self.tv_loss_summary = tf.summary.scalar('tv_loss', self.tv_loss)
         self.loss_D_summary = tf.summary.scalar('loss_D', self.loss_D)
@@ -226,32 +255,35 @@ class agGAN(object):
             staircase = True,
         )
         #print(global_learning_rate.get_shape())
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) #update BN moving_mean moving_variance
 
         beta1 = 0.5  # parameter for Adam optimizer
-        with tf.name_scope('encoder_train'):
-            E_optimizer = tf.train.AdamOptimizer(
-                learning_rate=global_learning_rate,
-                beta1=beta1
-            )
-            E_grads_and_vars = E_optimizer.compute_gradients(self.loss_E, var_list=self.E_variables)
-            E_train = E_optimizer.apply_gradients(E_grads_and_vars)
+        with tf.name_scope('discriminator_img_train'):
+            with tf.control_dependencies(update_ops):
+                D_optimizer = tf.train.AdamOptimizer(
+                    learning_rate=global_learning_rate,
+                    beta1=beta1
+                )
+                D_grads_and_vars = D_optimizer.compute_gradients(self.loss_D, var_list=self.Dimg_variables)
+                D_train = D_optimizer.apply_gradients(D_grads_and_vars)
 
-        with tf.name_scope('discriminator_train'):
-            D_optimizer = tf.train.AdamOptimizer(
-                learning_rate=global_learning_rate,
-                beta1=beta1
-            )
-            D_grads_and_vars = D_optimizer.compute_gradients(self.loss_D, var_list=self.D_variables)
-            D_train = D_optimizer.apply_gradients(D_grads_and_vars)
-        
+        with tf.name_scope('encoder_train'):
+            with tf.control_dependencies([D_train]):
+                E_optimizer = tf.train.AdamOptimizer(
+                    learning_rate=global_learning_rate,
+                    beta1=beta1
+                )
+                E_grads_and_vars = E_optimizer.compute_gradients(self.loss_E, var_list=self.E_variables)
+                E_train = E_optimizer.apply_gradients(E_grads_and_vars)
+            
         with tf.name_scope('generator_train'):
-            #with tf.control_dependencies([D_train]):
-            G_optimizer = tf.train.AdamOptimizer(
-                learning_rate=global_learning_rate,
-                beta1=beta1
-            )
-            G_grads_and_vars = G_optimizer.compute_gradients(self.loss_G, var_list=self.G_variables)
-            G_train = G_optimizer.apply_gradients(G_grads_and_vars) #must be fetch
+            with tf.control_dependencies([E_train]):
+                G_optimizer = tf.train.AdamOptimizer(
+                    learning_rate=global_learning_rate,
+                    beta1=beta1
+                )
+                G_grads_and_vars = G_optimizer.compute_gradients(self.loss_G, var_list=self.G_variables)
+                G_train = G_optimizer.apply_gradients(G_grads_and_vars) #must be fetch
         
         #add movingaverage
         #ema = tf.train.ExponentialMovingAverage(0.99)
@@ -309,11 +341,14 @@ class agGAN(object):
                 #update generator and discriminator
                 fetches = {
                     'G_train': G_train,
-                    'E_train': E_train,
+                    #'E_train': E_train,
                     'incr_global_step': incr_global_step,
                     'D_err': self.loss_D,
-                    'G_err': self.loss_G,
+                    'D_real_d_err': self.D_real_loss_d,
+                    'D_fake_d_err': self.D_fake_loss_d,
                     'E_err': self.loss_E,
+                    'G_err': self.loss_G,
+                    'G_fake_d_err': self.G_fake_loss_d,
                     'G_L1_err': self.G_loss_L1,
                     'G_GAN_err': self.G_loss_GAN,
                     'tv_err': self.tv_loss
@@ -356,19 +391,21 @@ class agGAN(object):
                 if should(40):
                     print('\nEpoch: [%d/%d] Batch: [%d/%d] iter: [%d] G_err=%.4f D_err=%.4f E_err=%.4f' %
                         (epoch+1, num_epochs, batch_ind+1, num_batch_per_epoch, global_step.eval(), results['G_err'], results['D_err'], results['E_err']))
-                    print('\tG_L1_err=%.4f G_GAN_err=%.4f' %
-                        (results['G_L1_err'], results['G_GAN_err']))
+                    print('\tG_L1_err=%.4f G_GAN_err=%.4f G_fake_d_err=%.4f' %
+                        (results['G_L1_err'], results['G_GAN_err'], results['G_fake_d_err']))
+                    print('\tD_fake_d_err=%.4f D_real_d_err=%.4f' % (
+                        results['D_fake_d_err'], results['D_real_d_err']))
 
                     print("\t%.2fs/iter Time left: %02d:%02d:%02d lr:%f lambda:%f" %
                           (elapse, int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60, global_learning_rate.eval(), lambda_e))
-
+                    print(self.save_dir)
             #evaluate  
             self.evaluate(epoch+1)
 
         coord.request_stop()
         coord.join(threads)
 
-    def creat_generator(self, images, labels_age, reuse_variables=False):
+    def creat_generator(self, images, labels_age, reuse_variables=False, is_training=True):
         if reuse_variables:
             tf.get_variable_scope().reuse_variables()
         
@@ -393,7 +430,14 @@ class agGAN(object):
                 rectified = lrelu(layers[-1], 0.2)
                 # [batch, in_height, in_width, in_channels] => [batch, in_height/2, in_width/2, out_channels]
                 convolved = conv(rectified, out_channels, stride=2)
-                output = batchnorm(convolved)
+                #output = batchnorm(convolved)
+                output = tf.contrib.layers.batch_norm(
+                    convolved,
+                    scale=True,
+                    is_training=is_training,
+                    scope='batchnorm',
+                    reuse=reuse_variables
+                )
                 layers.append(output)
                 print(output)
 
@@ -411,7 +455,6 @@ class agGAN(object):
             name=name
         )
         print(logits_id_classify)
-
         
         #decoder
         layer_specs = [
@@ -446,10 +489,17 @@ class agGAN(object):
                 rectified = tf.nn.relu(input)
                 # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
                 output = deconv(rectified, out_channels)
-                output = batchnorm(output)
+                #output = batchnorm(output)
+                output = tf.contrib.layers.batch_norm(
+                    output,
+                    scale=True,
+                    is_training=is_training,
+                    scope='batchnorm',
+                    reuse=reuse_variables
+                )
 
                 if dropout > 0.0:
-                    output = tf.nn.dropout(output, keep_prob=1 - dropout)
+                    output = tf.contrib.layers.dropout(output, keep_prob=1 - dropout, is_training=is_training)
                 print(output)
                 layers.append(output)
         
@@ -463,8 +513,58 @@ class agGAN(object):
             layers.append(output)
             print(output)
         #print('6', layers[6])
-        
         return output, layers[6], logits_id_classify
+    
+    def discriminator_img(self, images, reuse_variables=False, is_training=True):
+        if reuse_variables:
+            tf.get_variable_scope().reuse_variables()
+
+        layers = []
+
+        # [batch, 256, 256, in_channels] => [batch, 128, 128, num_encoder_channels]
+        with tf.variable_scope("disc_img_1"):
+            output = conv(images, self.num_encoder_channels, stride=2)
+            layers.append(output)
+
+        layer_specs = [
+            self.num_encoder_channels * 2, # encoder_2: [batch, 128, 128, num_encoder_channels] => [batch, 64, 64, num_encoder_channels*2]
+            self.num_encoder_channels * 4, # encoder_3: [batch, 64, 64, num_encoder_channels*2] => [batch, 32, 32, num_encoder_channels*4]
+            self.num_encoder_channels * 8, # encoder_4: [batch, 32, 32, num_encoder_channels*4] => [batch, 16, 16, num_encoder_channels*8]
+            self.num_encoder_channels * 16,# encoder_5: [batch, 16, 16, num_encoder_channels*8] => [batch, 8,  8, num_encoder_channels*16]
+            self.num_encoder_channels * 32,# encoder_6: [batch, 8,  8, num_encoder_channels*16] => [batch,  4,  4, num_encoder_channels*32]
+            self.num_encoder_channels * 32,# encoder_7: [batch, 4,  4, num_encoder_channels*32] => [batch,  2,  2, num_encoder_channels*32]
+        ]
+
+        for out_channels in layer_specs:
+            with tf.variable_scope("disc_img_%d" % (len(layers) + 1)):
+                rectified = lrelu(layers[-1], 0.2)
+                # [batch, in_height, in_width, in_channels] => [batch, in_height/2, in_width/2, out_channels]
+                convolved = conv(rectified, out_channels, stride=2)
+                #output = batchnorm(convolved)
+                output = tf.contrib.layers.batch_norm(
+                    convolved,
+                    scale=True,
+                    is_training=is_training,
+                    scope='batchnorm',
+                    reuse=reuse_variables
+                )
+                layers.append(output)
+                print(output)
+        
+        with tf.name_scope('disc_img_embedding'):
+            avg_pool = tf.nn.avg_pool(output, [1, 2, 2, 1], [1, 1, 1, 1], padding="VALID")
+            embedding = tf.reshape(
+                    avg_pool, [self.batch_size, self.num_encoder_channels * 32])
+        print(embedding)
+
+        name = 'disc_img_logit'
+        logit = fc(
+            input_vector=embedding,
+            num_output_length=1,
+            name=name
+        )
+
+        return logit
 
     def creat_discriminator(self, inputs, labels_age, reuse_variables=False):
         if reuse_variables:
@@ -680,16 +780,45 @@ class agGAN(object):
 
         num_test = 80
         max_steps = int(num_test / 8) #10
-
-        input_batch = np.zeros((56, self.image_size, self.image_size, 3), dtype=np.float32)
-        label_id_batch = np.zeros((56,), dtype=np.int32)
-        label_age_batch = np.zeros((56,), dtype=np.int32)
+        
+        input_batch = np.zeros((64, self.image_size, self.image_size, 3), dtype=np.float32)
+        label_id_batch = np.zeros((64,), dtype=np.int32)
+        label_age_batch = np.zeros((64,), dtype=np.int32)
 
         seed = 10
         random.seed(seed)
         random.shuffle(self.image_list_test)
+
+        input_batch = np.zeros((1, self.image_size, self.image_size, 3), dtype=np.float32)
+        label_id_batch = np.zeros((1,), dtype=np.int32)
+        label_age_batch = np.zeros((1,), dtype=np.int32)
+        image_label = self.image_list_test[0]
+        image_path = image_label.split()[0]
+        id = int(image_label.split()[1])
+        age = int(image_label.split()[2])
+        img = imread(image_path)
+        img = imresize(img, [self.image_size, self.image_size], interp='nearest')
+        img = (img / 255.0) * 2 - 1
+        input_batch[0] = img
+        label_id_batch[0] = id  
+        label_age_batch[0] = age
+        G = self.session.run(
+                self.G_test, 
+                feed_dict={
+                    self.input_batch_test: input_batch,
+                    self.label_id_batch_test: label_id_batch,
+                    self.label_age_batch_test: label_age_batch
+                }
+            )
+        G = (G + 1) / 2.0
+        frame = np.zeros([256, 256, 3])
+        frame = G[0]
+        imsave('1.png', frame)  
+        exit(0)    
+
+
         for i in range(max_steps):
-            images_path_labels = self.image_list[8*i:8*(i+1)]
+            images_path_labels = self.image_list_test[8*i:8*(i+1)]
             n = 0
             for image_label in images_path_labels:
                 image_path = image_label.split()[0]
@@ -721,11 +850,9 @@ class agGAN(object):
                     self.label_age_batch_test: label_age_batch
                 }
             )
-            name = '{:06d}.png'.format(i)
-            self.save_test_image_pair(input_batch, G, name)
+            name = 'epoch{:d}_{:06d}.png'.format(50000, i)
+            self.save_test_image_pair(input_batch[0:56], G[0:56], name)
             print("saving images:", name)
-
-
         """
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(coord=coord)
@@ -744,7 +871,8 @@ class agGAN(object):
 
         coord.request_stop()
         coord.join(threads)
-        """    
+        """
+        
 
     def save_test_image_pair(self, image_src, image_gen, name):
         sample_dir = os.path.join(self.save_dir, 'test_sample')

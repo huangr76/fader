@@ -31,7 +31,7 @@ flags.DEFINE_string("gpu", "1", "gpu id")
 flags.DEFINE_string("dataset_dir", "/media/huangrui/cacd/cacd_mtcnn128", "Path to dataset")
 flags.DEFINE_string("list_file", "/media/huangrui/cacd/cacd_mtcnn128_train.txt", "Path to list_file")
 flags.DEFINE_string("list_file_test", "/media/huangrui/cacd/cacd_mtcnn128_test.txt", "Path to list_file_test")
-flags.DEFINE_string("save_dir", "save/2017614_L1_Esoftmax", "path to save checkpoints, samples and summary")
+flags.DEFINE_string("save_dir", "save/2017615_L1_Esoftmax_Dimg_real_fake", "path to save checkpoints, samples and summary")
 flags.DEFINE_string("mode", "train", "train or test")
 flags.DEFINE_boolean("flip", True, "flip the image horizontally")
 
