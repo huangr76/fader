@@ -119,11 +119,10 @@ class agGAN(object):
 
         with tf.variable_scope('discriminator_img'):
             # discriminator on input image
-            self.predict_real = self.discriminator_img(self.input_batch)
+            self.predict_real, self.disc_img_real_id, self.disc_img_real_age = self.discriminator_img(self.input_batch)
 
             # discriminator on G
-            self.predict_fake = self.discriminator_img(self.G, reuse_variables=True)
-        
+            self.predict_fake, self.disc_img_fake_id, self.disc_img_fake_age = self.discriminator_img(self.G, reuse_variables=True)
             
         #*************************************loss function**************************************
         with tf.name_scope('total_variation_loss'):
@@ -154,24 +153,32 @@ class agGAN(object):
 
             self.G_fake_loss_d = tf.reduce_mean(
                 tf.nn.sigmoid_cross_entropy_with_logits(logits=self.predict, labels=tf.ones_like(self.predict_fake)))
-            
-            #self.loss_G = self.G_loss_L1 + self.lambda_e * self.G_loss_GAN
-            self.loss_G = self.G_loss_L1 + self.G_fake_loss_d
+            self.G_fake_loss_id = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.label_id_batch, logits=self.disc_img_fake_id))
+            self.G_fake_loss_age = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.label_age_batch, logits=self.disc_img_fake_age))    
+
+            self.loss_G = self.G_loss_L1 + self.G_fake_loss_d + self.G_fake_loss_id + self.G_fake_loss_age
             
         with tf.name_scope('discriminator_loss'):
             #loss of discriminator
-            self.loss_D = tf.reduce_mean(-tf.log(self.predict + EPS))
+            self.loss_Den = tf.reduce_mean(-tf.log(self.predict + EPS))
 
         with tf.name_scope('discriminator_img_loss'):
             self.D_real_loss_d = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
                 logits=self.predict_real, labels=tf.ones_like(self.predict_real)))
-
+            self.D_real_loss_id = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.label_id_batch, logits=self.disc_img_real_id))
+            self.D_real_loss_age = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.label_age_batch, logits=self.disc_img_fake_age))    
+            
             #fake image
             self.D_fake_loss_d = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
                 logits=self.predict_fake, labels=tf.zeros_like(self.predict_fake)))
 
             #loss of discriminator
-            self.loss_D = self.D_real_loss_d + self.D_fake_loss_d
+            #self.loss_D = self.D_real_loss_d + self.D_fake_loss_d
+            self.loss_D = self.D_real_loss_d + self.D_fake_loss_d + self.D_real_loss_id + self.D_real_loss_age
         
         #*************************************trainable variables****************************************
         trainable_variables = tf.trainable_variables()
@@ -184,9 +191,9 @@ class agGAN(object):
         self.G_variables = [var for var in trainable_variables if ('encoder_' in var.name or 'decoder_' in var.name)]
         
         #variables of discriminator
-        self.D_variables = [var for var in trainable_variables if 'layer_' in var.name]
+        self.Den_variables = [var for var in trainable_variables if 'layer_' in var.name]
         self.Dimg_variables = [var for var in trainable_variables if 'disc_img_' in var.name]
-        print(len(self.E_variables), len(self.G_variables), len(self.D_variables), len(self.Dimg_variables))
+        print(len(self.E_variables), len(self.G_variables), len(self.Den_variables), len(self.Dimg_variables))
         
         
         #*************************************collect the summary**************************************
@@ -195,15 +202,24 @@ class agGAN(object):
         self.predict_summary = tf.summary.histogram('predict', self.predict)
         self.logits_id_classify_summary = tf.summary.histogram('logits_id_classify', self.logits_id_classify)
         self.predict_real_summary = tf.summary.histogram('predict_real', self.predict_real)
+        self.disc_img_real_id_summary = tf.summary.histogram('disc_img_real_id', self.disc_img_real_id)
+        self.disc_img_real_age_summary = tf.summary.histogram('disc_img_real_age', self.disc_img_real_age)
         self.predict_fake_summary = tf.summary.histogram('predict_fake', self.predict_fake)
+        self.disc_img_fake_id_summary = tf.summary.histogram('disc_img_fake_id', self.disc_img_fake_id)
+        self.disc_img_fake_age_summary = tf.summary.histogram('disc_img_fake_age', self.disc_img_fake_age)
+
         
         self.E_loss_id_summary = tf.summary.scalar('E_loss_id', self.E_loss_id)
 
         self.G_loss_L1_summary = tf.summary.scalar('G_loss_L1', self.G_loss_L1)
         self.G_loss_GAN_summary = tf.summary.scalar('G_loss_GAN', self.G_loss_GAN)
         self.G_fake_loss_d_summary = tf.summary.scalar('G_fake_loss_d', self.G_fake_loss_d)
+        self.G_fake_loss_id_summary = tf.summary.scalar('G_fake_loss_id', self.G_fake_loss_id)
+        self.G_fake_loss_age_summary = tf.summary.scalar('G_fake_loss_age', self.G_fake_loss_age)
 
         self.D_real_loss_d_summary = tf.summary.scalar('D_real_loss_d', self.D_real_loss_d)
+        self.D_real_loss_id_summary = tf.summary.scalar('D_real_loss_id', self.D_real_loss_id)
+        self.D_real_loss_age_summary = tf.summary.scalar('D_real_loss_age', self.D_real_loss_age)
         self.D_fake_loss_d_summary = tf.summary.scalar('D_fake_loss_d', self.D_fake_loss_d)
         
         self.tv_loss_summary = tf.summary.scalar('tv_loss', self.tv_loss)
@@ -345,12 +361,16 @@ class agGAN(object):
                     'incr_global_step': incr_global_step,
                     'D_err': self.loss_D,
                     'D_real_d_err': self.D_real_loss_d,
+                    'D_real_id_err': self.D_real_loss_id,
+                    'D_real_age_err': self.D_real_loss_age,
                     'D_fake_d_err': self.D_fake_loss_d,
                     'E_err': self.loss_E,
                     'G_err': self.loss_G,
-                    'G_fake_d_err': self.G_fake_loss_d,
                     'G_L1_err': self.G_loss_L1,
-                    'G_GAN_err': self.G_loss_GAN,
+                    'G_fake_d_err': self.G_fake_loss_d,
+                    'G_fake_id_err': self.G_fake_loss_id,
+                    'G_fake_age_err': self.G_fake_loss_age,
+                    #'G_GAN_err': self.G_loss_GAN,
                     'tv_err': self.tv_loss
                 }
 
@@ -391,11 +411,10 @@ class agGAN(object):
                 if should(40):
                     print('\nEpoch: [%d/%d] Batch: [%d/%d] iter: [%d] G_err=%.4f D_err=%.4f E_err=%.4f' %
                         (epoch+1, num_epochs, batch_ind+1, num_batch_per_epoch, global_step.eval(), results['G_err'], results['D_err'], results['E_err']))
-                    print('\tG_L1_err=%.4f G_GAN_err=%.4f G_fake_d_err=%.4f' %
-                        (results['G_L1_err'], results['G_GAN_err'], results['G_fake_d_err']))
-                    print('\tD_fake_d_err=%.4f D_real_d_err=%.4f' % (
-                        results['D_fake_d_err'], results['D_real_d_err']))
-
+                    print('\tG_L1_err=%.4f G_fake_d_err=%.4f G_fake_id_err=%.4f G_fake_age_err=%.4f' %
+                        (results['G_L1_err'], results['G_fake_d_err'], results['G_fake_id_err'], results['G_fake_age_err']))
+                    print('\tD_fake_d_err=%.4f D_real_d_err=%.4f D_real_id_err=%.4f D_real_age_err=%.4f' % (
+                        results['D_fake_d_err'], results['D_real_d_err'], results['D_real_id_err'], results['D_real_age_err']))
                     print("\t%.2fs/iter Time left: %02d:%02d:%02d lr:%f lambda:%f" %
                           (elapse, int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60, global_learning_rate.eval(), lambda_e))
                     print(self.save_dir)
@@ -564,7 +583,21 @@ class agGAN(object):
             name=name
         )
 
-        return logit
+        name = 'disc_img_id'
+        disc_img_id = fc(
+            input_vector=embedding,
+            num_output_length=self.num_person,
+            name=name
+        )
+
+        name = 'disc_img_age'
+        disc_img_age = fc(
+            input_vector=embedding,
+            num_output_length=self.num_categories,
+            name=name
+        )
+
+        return logit, disc_img_id, disc_img_age
 
     def creat_discriminator(self, inputs, labels_age, reuse_variables=False):
         if reuse_variables:
