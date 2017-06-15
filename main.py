@@ -30,7 +30,8 @@ flags.DEFINE_integer("LAMBDA", 10, "Gradient penalty lambda hyperparameter")
 flags.DEFINE_string("gpu", "1", "gpu id")
 flags.DEFINE_string("dataset_dir", "/media/huangrui/cacd/cacd_mtcnn128", "Path to dataset")
 flags.DEFINE_string("list_file", "/media/huangrui/cacd/cacd_mtcnn128_train.txt", "Path to list_file")
-flags.DEFINE_string("save_dir", "save/test", "path to save checkpoints, samples and summary")
+flags.DEFINE_string("list_file_test", "/media/huangrui/cacd/cacd_mtcnn128_test.txt", "Path to list_file_test")
+flags.DEFINE_string("save_dir", "save/2017615_L1_Esoftmax_Dimg_real_fake_softmax_id_age", "path to save checkpoints, samples and summary")
 flags.DEFINE_string("mode", "train", "train or test")
 flags.DEFINE_boolean("flip", True, "flip the image horizontally")
 
@@ -63,6 +64,7 @@ def main(_):
                 save_dir = a.save_dir,
                 dataset_dir = a.dataset_dir,
                 list_file = a.list_file,
+                list_file_test = a.list_file_test,
                 mode = a.mode,
                 LAMBDA = a.LAMBDA,
                 flip = a.flip

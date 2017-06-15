@@ -68,12 +68,6 @@ def fc(input_vector, num_output_length, name='fc'):
         )
         return tf.matmul(input_vector, w) + b
 
-
-
-
-    with tf.name_scope("lrelu"):
-        return tf.maximum(logits, leak*logits)
-
 def concat_label(x, labels_one_hot, batch_size, duplicate=1):
     x_shape = x.get_shape().as_list()
     #print('x_shape', x_shape)
